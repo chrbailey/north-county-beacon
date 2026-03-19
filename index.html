@@ -304,8 +304,8 @@ const FEATURED = [
       { text: "320 units, 48 affordable", src: "carlsbadca.gov planning documents" },
       { text: "RHNA compliance", src: "SANDAG Regional Housing Assessment" }
     ],
-    relevance: generateRelevance("Carlsbad City Council housing zoning development", { tag: "Local Government" }, "Carlsbad City Council housing"),
-    conservative: generateConservativeAnalysis("Carlsbad City Council housing zoning development RHNA", { tag: "Housing / Real Estate" })
+    relevance: generateRelevance("Carlsbad City Council housing zoning development", "Carlsbad City Council housing", { tag: "Local Government" }),
+    conservative: generateConservativeAnalysis("Carlsbad City Council housing zoning development RHNA", "housing zoning RHNA", { tag: "Housing / Real Estate" })
   },
   {
     id: 9002,
@@ -318,8 +318,8 @@ const FEATURED = [
       { text: "4,200 new jobs", src: "SANDAG Economic Indicators Report" },
       { text: "Wage growth data", src: "Bureau of Labor Statistics, San Diego MSA" }
     ],
-    relevance: generateRelevance("San Diego tech jobs hiring economy", { tag: "Business & Tech" }, "San Diego employment economy"),
-    conservative: generateConservativeAnalysis("San Diego unemployment jobs economy hiring", { tag: "Business & Tech" })
+    relevance: generateRelevance("San Diego tech jobs hiring economy", "San Diego employment economy", { tag: "Business & Tech" }),
+    conservative: generateConservativeAnalysis("San Diego unemployment jobs economy hiring", "San Diego employment economy", { tag: "Business & Tech" })
   },
   {
     id: 9003,
@@ -332,8 +332,8 @@ const FEATURED = [
       { text: "State cost stack breakdown", src: "Legislative Analyst's Office, Gas Price Report" },
       { text: "AB 2087 cap-and-trade expansion", src: "CA Legislature Bill Text" }
     ],
-    relevance: generateRelevance("California gas price cap-and-trade energy cost", { tag: "Energy & Climate" }, "California gas price energy"),
-    conservative: generateConservativeAnalysis("California gas price cap-and-trade energy cost regulation", { tag: "Energy & Climate" })
+    relevance: generateRelevance("California gas price cap-and-trade energy cost", "California gas price energy", { tag: "Energy & Climate" }),
+    conservative: generateConservativeAnalysis("California gas price cap-and-trade energy cost regulation", "California gas price energy", { tag: "Energy & Climate" })
   }
 ];
 
