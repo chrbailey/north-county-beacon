@@ -435,7 +435,15 @@ const html = htm.bind(React.createElement);
 </script>
 ```
 
-Three dependencies. All from esm.sh (ES module CDN). No npm install. No node_modules.
+Three JS dependencies. All from esm.sh (ES module CDN). No npm install. No node_modules.
+
+**Runtime service dependency:**
+
+| Service | Used By | Failure Mode |
+|---|---|---|
+| rss2json.com | `api/news.js` — proxies Google News RSS to JSON | `fetchHeadlines()` returns `[]`. Sentiment score returns `{ value: 0, explain: { ...caveats: ["News feed unavailable"] } }`. All other features (grades, dynasty, trends) are unaffected. |
+
+The sentiment module is the only feature with an external service dependency beyond Sleeper. Its failure is graceful and isolated — the player card renders everything else normally and shows "News buzz unavailable" in the sentiment panel.
 
 ### ui/app.js — Root Component
 
@@ -533,6 +541,14 @@ On mount (full mode):
   3. engine/scoring.calcFantasyPts(stats, format) → actual result
   4. engine/scoring.calcFantasyPts(projections, format) → projected result
   5. Ceiling/floor: projected.value × position variance multiplier → with explain
+     Multipliers defined in engine/scoring.js:
+     ```
+     export const VARIANCE_MULTIPLIERS = {
+       ceiling: { QB: 1.5, RB: 1.6, WR: 1.7, TE: 1.8, K: 1.3 },
+       floor:   { QB: 0.5, RB: 0.3, WR: 0.3, TE: 0.2, K: 0.5 },
+     };
+     ```
+     Caveats in explain: "Projection × position variance multiplier — a heuristic range, not a statistical confidence interval"
   6. Async parallel:
      a. engine/trends: fetch multi-week stats → analyzePatterns → trend result
      b. engine/sentiment: fetchPlayerSentiment → buzz result
@@ -554,16 +570,27 @@ The differentiating interaction. Wraps any computed value and makes it expandabl
   - Source attribution
   - Caveats list
 
+**State ownership:** `card.js` owns a single `openPanel` string state (e.g., `"grade"`, `"dynasty"`, `"trend"`, or `null`). Each ExplainPanel receives controlled props — it does not manage its own expanded state. This enforces the "only one panel open at a time" constraint at the card level.
+
 **Implementation approach:**
 
 ```javascript
-function ExplainPanel({ result, children }) {
-  const [expanded, setExpanded] = useState(false);
+// card.js owns the state
+const [openPanel, setOpenPanel] = useState(null);
+const toggle = (id) => setOpenPanel(prev => prev === id ? null : id);
 
+// Each metric passes controlled props:
+html`<${ExplainPanel} id="grade" isOpen=${openPanel === "grade"}
+  onToggle=${toggle} result=${gradeResult}>
+  ${children}
+<//>`
+
+// explain.js — controlled component, no internal expanded state
+function ExplainPanel({ id, isOpen, onToggle, result, children }) {
   return html`
-    <div class="explainable" onClick=${() => setExpanded(e => !e)}>
+    <div class="explainable" onClick=${() => onToggle(id)}>
       ${children}
-      ${expanded && result?.explain && html`
+      ${isOpen && result?.explain && html`
         <div class="explain-depth">
           <div class="explain-header">
             <span class="explain-title">HOW THIS WAS CALCULATED</span>
@@ -585,7 +612,7 @@ function ExplainPanel({ result, children }) {
 }
 ```
 
-**Only one panel open at a time per card.** When the user clicks a different metric, the previous one collapses. This prevents the card from becoming overwhelmingly tall.
+**Only one panel open at a time per card.** When the user clicks a different metric, `card.js` sets `openPanel` to the new ID, which closes the previous panel and opens the new one. This prevents the card from becoming overwhelmingly tall.
 
 ### ui/trade.js — Trade Analyzer
 
