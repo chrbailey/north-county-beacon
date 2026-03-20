@@ -62,7 +62,6 @@ function App() {
   const { players, stats, projections, currentWeek, loading, error } = state;
   const scoringFormat = config.scoringFormat;
 
-  // Content routing — if/else instead of ternary chains
   let content;
   if (loading) {
     content = html`<div style=${{ padding: '60px 20px', textAlign: 'center' }}>
@@ -83,7 +82,6 @@ function App() {
     content = html`<${PlayerScout} players=${players} stats=${stats} projections=${projections} currentWeek=${currentWeek} scoringFormat=${scoringFormat} />`;
   }
 
-  // Nav tabs
   const tabs = [
     { id: 'scout', label: 'Scout' },
     { id: 'trade', label: 'Trade' },
@@ -120,7 +118,6 @@ function App() {
   `;
 }
 
-// Error Boundary — uses React.createElement directly (not htm) to avoid any template issues
 class ErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { error: null }; }
   static getDerivedStateFromError(error) { return { error }; }
@@ -129,7 +126,7 @@ class ErrorBoundary extends React.Component {
     if (this.state.error) {
       return React.createElement('div', { style: { padding: 40, textAlign: 'center' } },
         React.createElement('h2', { style: { color: '#dc2626' } }, 'Something went wrong'),
-        React.createElement('pre', { style: { fontSize: 11, color: '#6b7280', textAlign: 'left', maxWidth: 600, margin: '0 auto', whiteSpace: 'pre-wrap', background: '#f5f5f5', padding: 12 } },
+        React.createElement('pre', { style: { fontSize: 11, color: '#6b7280', textAlign: 'left', maxWidth: 600, margin: '0 auto', whiteSpace: 'pre-wrap', background: '#f5f5f5', padding: 12, borderRadius: 6 } },
           String(this.state.error) + '\n' + (this.state.error.stack || '')),
         React.createElement('button', { onClick: () => location.reload(), style: { marginTop: 12, padding: '8px 20px', background: '#1a2744', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' } }, 'Reload')
       );

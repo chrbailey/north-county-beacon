@@ -11,11 +11,11 @@ export function GradeRing({ grade, size = 52, label }) {
   const offset = circumference * (1 - grade / 100);
   return html`
     <div class="grade-ring" style=${{ width: size, height: size, position: 'relative' }}>
-      <svg width=${size} height=${size} style="transform: rotate(-90deg)">
+      <svg width=${size} height=${size} style=${{ transform: 'rotate(-90deg)' }}>
         <circle cx=${size/2} cy=${size/2} r=${r} fill="none" stroke="#e5e7eb" stroke-width="4" />
         <circle cx=${size/2} cy=${size/2} r=${r} fill="none" stroke=${color} stroke-width="4"
           stroke-dasharray=${circumference} stroke-dashoffset=${offset} stroke-linecap="round"
-          style="transition: stroke-dashoffset 0.5s" />
+          style=${{ transition: 'stroke-dashoffset 0.5s' }} />
       </svg>
       <div style=${{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)' }}>
         <div class="grade-ring__value" style=${{ fontSize: size > 40 ? 16 : 12, color }}>${grade}</div>
@@ -27,7 +27,7 @@ export function GradeRing({ grade, size = 52, label }) {
 
 // ── Sparkline (CSS bar chart) ──
 export function Sparkline({ data, height = 28, color = '#16a34a' }) {
-  if (!data || data.length < 2) return html`<span class="text-meta" style="font-size:10px">—</span>`;
+  if (!data || data.length < 2) return html`<span class="text-meta" style=${{ fontSize: 10 }}>—</span>`;
   const max = Math.max(...data, 1);
   const barW = Math.max(3, Math.min(8, Math.floor(80 / data.length)));
   return html`
@@ -72,7 +72,7 @@ export function SignalBadge({ signal, confidence }) {
   const bgs = { 'BUY LOW': '#f0fdf4', 'SELL HIGH': '#fef2f2', 'HOLD/BUY': '#f0fdf4', 'HOLD/SELL': '#fff7ed', 'HOLD': '#f9fafb' };
   return html`
     <span class="signal-badge" style=${{ color: colors[signal] || '#6b7280', background: bgs[signal] || '#f9fafb' }}>
-      ${signal} <span style="font-weight:400;font-size:9px">${confidence}%</span>
+      ${signal} <span style=${{ fontWeight: 400, fontSize: 9 }}>${confidence}%</span>
     </span>
   `;
 }
