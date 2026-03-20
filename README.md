@@ -1,6 +1,6 @@
-# North County Beacon
+# sleeper-scores
 
-A personalized news aggregator and fantasy football intelligence platform — a single standalone HTML file you can host anywhere.
+Open-source fantasy football intelligence. Every number shows its math.
 
 **Live site:** [chrbailey.github.io/north-county-beacon](https://chrbailey.github.io/north-county-beacon/)
 
@@ -8,73 +8,104 @@ A personalized news aggregator and fantasy football intelligence platform — a 
 
 ## What It Does
 
-### News Aggregator
-- Pulls live Google News headlines via RSS, filtered to topics you care about
-- Editable search queries — add, remove, or reorder your news feeds anytime
-- Featured stories curated for North San Diego County (Carlsbad, Encinitas, Oceanside, Vista)
-- Profile-driven personalization: your job, school, hobbies, and interests shape the feed
+Search any NFL player and get a full intelligence card: composite grade, dynasty value, weekly trend analysis, news buzz, ceiling/floor projections, and a scouting report. Drop players into the Trade Analyzer to compare dynasty values side by side.
 
-### Fantasy Football Intelligence Engine
-Connect your Sleeper leagues and get tools that go way beyond the Sleeper app:
+**The differentiator:** Click any computed number to see exactly how it was calculated — the formula, the inputs, the benchmarks, and the caveats. No black boxes.
 
-**Player Scout** — Search any active NFL player by name, team name, or city. Each player gets a full intelligence card with:
-- **Composite Grade (0-99):** Built from actual 2025 per-game stats scored against position-specific benchmarks. QBs are graded on pass yards, TDs, completion %, rush yards, and interceptions. RBs on rush yards, TDs, receptions, receiving yards, and fumbles. Every position has its own scale — similar concept to PFF grades but computed from publicly available Sleeper data.
-- **Dynasty Score (1-99):** A research-backed value score that factors in current production, age relative to position-specific prime windows, career longevity projections, and workload. The age curves come from EPA studies spanning 2014-2024: QBs peak at 28-33, RBs at 23-26 (with only ~6 year careers), WRs at 25-30, TEs at 26-30. For running backs, it estimates career touches and applies penalties as backs approach the well-documented 2,500-touch cliff where production drops sharply.
-- **Trajectory Detection:** Each player is classified as ASCENDING, PRIME, DECLINING, or LATE CAREER based on their age relative to position norms. Ascending players show years until peak; declining players show years until the career cliff.
-- **Ceiling/Floor Projections:** Best-case and worst-case weekly fantasy point estimates based on position variance patterns.
-- **Media Sentiment:** Live news headlines are scored for positive/negative buzz to gauge the narrative around a player.
-- **Multi-Week Trend Analysis:** Analyzes recent weekly stat lines against season baselines using linear regression and coefficient of variation to flag BUY LOW (underperforming recent weeks) and SELL HIGH (surging above baseline) windows.
-- **Scout Report:** A written summary combining all signals — grade, trajectory, workload warnings, pattern detection, and sentiment — into actionable advice.
+## What It Computes
 
-**Trade Analyzer** — Drop players on each side of a proposed trade. Both sides are valued using the same dynasty formula (production + youth + longevity + position premium - workload penalties) so you can instantly see if a deal is fair or lopsided.
-
-**League Dashboard** — View rosters, standings, and weekly matchups for up to 4 connected Sleeper leagues.
-
-## How It Works
-
-Everything runs client-side in the browser. There are no servers, databases, accounts, or logins.
-
-- **Sleeper API** (free, no auth, CORS-friendly) provides player data, league rosters, stats, projections, and matchup scores
-- **Google News RSS** via rss2json.com provides live headlines for the news feed and player sentiment analysis
-- **URL hash persistence** stores your profile and league configuration in the URL fragment (the part after `#`). This means your data never leaves your browser — it's encoded in the link itself. Bookmark your personalized URL and your settings persist across visits.
-
-The entire app is a single HTML file with embedded React 18, Babel (for in-browser JSX), and CSS. No build step, no dependencies to install, no npm. Just open the file or host it anywhere static files are served.
+| Metric | Method | Click to See |
+|--------|--------|-------------|
+| **Stat-Based Score (0-99)** | Percentile rank of per-game stats against position-specific benchmarks | Component breakdown, benchmark arrays, weights, weighted sum |
+| **Dynasty Score (1-99)** | Production (40%) + youth (30%) + longevity (15%) + position premium (15%) - penalties | Age curve, peak window, touch cliff estimate, injury multiplier |
+| **Trend** | Linear regression + coefficient of variation on 2-8 weeks of fantasy points | Slope, CV, consecutive streaks, recent vs season mean, signal thresholds |
+| **News Buzz (-100 to +100)** | Keyword frequency scoring on Google News headlines | Keyword lists, match counts, articles scanned, scoring formula |
+| **Ceiling / Floor** | Projected points x position variance multiplier | Multiplier per position, caveat that it's a heuristic not a CI |
+| **Fantasy Points** | Standard scoring rules (PPR / Half / Standard) | Each stat x multiplier = contribution |
 
 ## Setup
 
-1. Open the site or the HTML file
-2. Click the gear icon to open Settings
-3. Enter your Sleeper username and league IDs (found in your Sleeper app under league settings)
-4. Customize your news feeds, profile, and interests
-5. Bookmark the URL — your settings are saved in it
+1. Open the site (or run `python -m http.server` in this directory)
+2. Click **Settings** and enter your Sleeper username
+3. Search any player in **Scout** or compare trades in **Trade**
 
-## Forking / Using This Yourself
+That's it. No accounts, no API keys, no build step.
 
-If you fork this repo, you'll get a clean generic template. All personal data (names, leagues, profile info) lives in the URL hash, not in the code. Just set up your own profile through the Settings panel and you're good to go.
+## How It Works
 
-To host your own copy: enable GitHub Pages on your fork (Settings > Pages > Source: main branch) and your site will be live at `https://yourusername.github.io/north-county-beacon/`.
+Everything runs client-side in the browser. Zero backend.
+
+- **Sleeper API** (free, no auth, CORS-friendly) provides player data, stats, and projections
+- **Google News RSS** via rss2json.com provides headlines for the news buzz feature
+- **IndexedDB** caches the 9MB player database for 24 hours — second visit loads instantly
+- **localStorage** persists your configuration (username, leagues, scoring format)
+
+## File Structure
+
+```
+sleeper-scores/
+├── index.html              # Shell: loads ES modules, mounts React app
+├── style.css               # Design tokens (CSS custom properties) + component styles
+├── config.js               # localStorage persistence for user settings
+├── engine/                 # Pure computation — zero DOM, zero React, zero side effects
+│   ├── scoring.js          # Fantasy point calculation (PPR/half/standard)
+│   ├── grades.js           # Composite grading: benchmarks, percentile scoring, weights
+│   ├── dynasty.js          # Dynasty valuation: age curves, touch cliff, position premium
+│   ├── trends.js           # Multi-week pattern analysis: regression, CV, buy/sell signals
+│   └── sentiment.js        # News keyword buzz scoring (honestly labeled)
+├── api/                    # Data fetching — zero engine or UI dependencies
+│   ├── sleeper.js          # Sleeper API wrapper + IndexedDB cache
+│   └── news.js             # Google News RSS fetch via rss2json.com
+└── ui/                     # React components (ES modules + htm)
+    ├── htm.js              # htm + React binding (shared by all UI modules)
+    ├── app.js              # Root: data loading, routing, state management
+    ├── scout.js            # Player search + results table
+    ├── trade.js            # Trade analyzer with explainable verdict
+    ├── card.js             # Player Intelligence Card (the core UI unit)
+    ├── explain.js          # ExplainPanel — the "show your work" interaction
+    ├── settings.js         # Configuration panel
+    └── primitives.js       # GradeRing, Sparkline, SentimentMeter, badges
+```
+
+**Architecture rule:** `engine/` has zero imports from `api/` or `ui/`. `api/` has zero imports from `ui/`. Arrows only point downward. The engine is portable — import it into Node, a test harness, or a different UI.
+
+## Forking This
+
+**Change the design:** Edit CSS custom properties in `style.css` (lines 4-22).
+
+**Change the grades:** Edit `BENCHMARKS` and `WEIGHTS` in `engine/grades.js`. These are exported constants at the top of the file.
+
+**Change dynasty valuation:** Edit `AGE_CURVES` and `DYNASTY_WEIGHTS` in `engine/dynasty.js`.
+
+**Change trend thresholds:** Edit `TREND_THRESHOLDS` in `engine/trends.js`.
+
+**Change sentiment keywords:** Edit `POSITIVE_KEYWORDS` and `NEGATIVE_KEYWORDS` in `engine/sentiment.js`.
+
+**Change scoring rules:** Edit `SCORING_RULES` in `engine/scoring.js`.
+
+Every constant that drives a computation is exported, named, and at the top of its file.
 
 ## Tech Stack
 
-- React 18 (via CDN)
-- Babel Standalone (in-browser JSX transpilation)
-- Sleeper API
+- React 18 (via esm.sh CDN)
+- [htm](https://github.com/developit/htm) — JSX alternative, 700 bytes, no build step
+- ES modules via import maps — no bundler
+- Sleeper API (free, no auth)
 - Google News RSS via rss2json.com
-- Pure CSS visualizations (SVG grade rings, sparklines, sentiment meters)
+- IndexedDB for player database caching
+- CSS custom properties for theming
 - GitHub Pages hosting
 
-## Data Sources & Methodology
+## Data Sources
 
-| Signal | Source | Method |
-|--------|--------|--------|
-| Player stats | Sleeper API | 2025 per-game actuals |
-| Projections | Sleeper API | Rest-of-season projections |
-| Composite grade | Computed | Percentile scoring against position benchmarks |
-| Age curves | EPA 2014-2024 study | Position-specific peak/decline/cliff ages |
-| RB touch cliff | Historical research | Career touches > 2,500 = sharp decline |
-| Dynasty value | Computed | Weighted: production (40%) + youth (30%) + longevity (15%) + position (15%) |
-| Sentiment | Google News RSS | Keyword scoring on recent headlines |
-| Trend analysis | Computed | Linear regression + coefficient of variation on multi-week stats |
+| Data | Source |
+|------|--------|
+| Player database | Sleeper API `/players/nfl` |
+| Per-game stats | Sleeper API `/stats/nfl/regular/{season}/{week}` |
+| Projections | Sleeper API `/projections/nfl/regular/{season}/{week}` |
+| Age curves | EPA 2014-2024 positional study |
+| RB touch cliff | Historical research (2,500 career touches) |
+| News headlines | Google News RSS via rss2json.com |
 
 ---
 
