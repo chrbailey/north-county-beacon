@@ -78,7 +78,7 @@ function App() {
 
   return html`
     <div class="app-container">
-      <!-- Nav Bar -->
+
       <div class="nav-bar">
         <div class="nav-logo" onClick=${() => setView('scout')}>
           <div class="nav-logo-mark">SS</div>
@@ -101,7 +101,7 @@ function App() {
         </div>
       </div>
 
-      <!-- Content -->
+
       ${loading ? html`
         <div style=${{ padding: '60px 20px', textAlign: 'center' }}>
           <div class="loading-pulse" style=${{ fontSize: 14, color: 'var(--meta)', marginBottom: 12 }}>
@@ -131,7 +131,7 @@ function App() {
         `}
       `}
 
-      <!-- Footer -->
+
       <div class="footer">
         <div class="footer__title">sleeper-scores</div>
         <div class="footer__sub">Every number shows its math. Fork it on GitHub.</div>
@@ -141,6 +141,26 @@ function App() {
   `;
 }
 
+// -- Error Boundary --
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { error: null }; }
+  static getDerivedStateFromError(error) { return { error }; }
+  componentDidCatch(error, info) { console.error('React Error Boundary:', error, info); }
+  render() {
+    if (this.state.error) {
+      return html`
+        <div style=${{ padding: 40, textAlign: 'center', fontFamily: 'var(--font)' }}>
+          <div style=${{ fontSize: 16, color: 'var(--red)', marginBottom: 8 }}>Something went wrong</div>
+          <pre style=${{ fontSize: 11, color: 'var(--meta)', textAlign: 'left', maxWidth: 600, margin: '0 auto', whiteSpace: 'pre-wrap', background: 'var(--surface)', padding: 12, borderRadius: 6 }}>${this.state.error.toString()}\n${this.state.error.stack || ''}</pre>
+          <button class="btn btn--primary" style=${{ marginTop: 12 }} onClick=${() => { this.setState({ error: null }); location.reload(); }}>Reload</button>
+        </div>
+      `;
+    }
+    return this.props.children;
+  }
+}
+
 // -- Mount --
 const root = createRoot(document.getElementById('root'));
-root.render(html`<${App} />`);
+root.render(html`<${ErrorBoundary}><${App} /><//>`);
+

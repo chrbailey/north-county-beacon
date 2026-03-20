@@ -88,7 +88,8 @@ export function PlayerIntelligenceCard({ player, stats, projections, currentWeek
 
   return html`
     <div class="card fade-in">
-      <!-- Header -->
+
+
       <div class="flex-between" style=${{ marginBottom: 12 }}>
         <div style=${{ flex: 1 }}>
           <div class="flex-center" style=${{ gap: 8 }}>
@@ -117,7 +118,7 @@ export function PlayerIntelligenceCard({ player, stats, projections, currentWeek
         </div>
       </div>
 
-      <!-- Stat Grid -->
+
       <div class="stat-grid">
         ${[
           { id: 'actual', label: 'ACTUAL', result: actualResult, color: actualResult.value > 15 ? 'var(--green)' : 'var(--navy)' },
@@ -136,7 +137,7 @@ export function PlayerIntelligenceCard({ player, stats, projections, currentWeek
         `)}
       </div>
 
-      <!-- Raw Stats Bar -->
+
       <div class="stats-bar">
         ${pos === 'QB' && html`
           <${StatChip} label="Pass" value=${`${st.pass_yd||0}yd`} />
@@ -173,7 +174,7 @@ export function PlayerIntelligenceCard({ player, stats, projections, currentWeek
         `}
       </div>
 
-      <!-- Trend + Buzz Row -->
+
       ${loadingIntel ? html`
         <div class="loading-pulse" style=${{ padding: 8, fontSize: 10, color: 'var(--meta)' }}>Loading intelligence (multi-week stats + news)...</div>
       ` : html`
@@ -226,7 +227,7 @@ export function PlayerIntelligenceCard({ player, stats, projections, currentWeek
         </div>
       `}
 
-      <!-- Scout Report -->
+
       <div class="scout-report">
         <strong>Scout Report:</strong> ${scoutParts.join(' ')}
       </div>
