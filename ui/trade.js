@@ -1,31 +1,47 @@
-// ui/trade.js — Trade Analyzer with explainable verdicts
+// ui/trade.js — Trade Analyzer using pre-computed play-by-play analytics profiles
 
 import { React, html } from './htm.js';
-import { PlayerIntelligenceCard } from './card.js';
-import { computeCompositeGrade, gradeColor } from '../engine/grades.js';
-import { calcDynastyValue } from '../engine/dynasty.js';
-import { calcFantasyPts } from '../engine/scoring.js';
+import { analyzePlayer, tradeValue } from '../engine/analytics.js';
+import { getPlayerProfile, getTeamProfile } from '../api/profiles.js';
+import { gradeColor } from '../engine/grades.js';
 import { ExplainPanel } from './explain.js';
 import { GradeRing, POS_COLORS, NFL_TEAMS } from './primitives.js';
 
-const { useState, useEffect, useMemo } = React;
+const { useState, useMemo } = React;
 
-export function TradeAnalyzer({ players, stats, projections, currentWeek, scoringFormat }) {
+function keyStat(analysis, position) {
+  if (!analysis) return '\u2014';
+  if (position === 'QB' && analysis.epa) {
+    const v = analysis.epa.value;
+    return v != null ? v.toFixed(2) + ' EPA/db' : '\u2014';
+  }
+  if ((position === 'WR' || position === 'TE') && analysis.targetShare) {
+    const v = analysis.targetShare.value;
+    return v != null ? v.toFixed(1) + '% ts' : '\u2014';
+  }
+  if (position === 'RB' && analysis.weightedOpps) {
+    const v = analysis.weightedOpps.value;
+    return v != null ? v + ' wOpp' : '\u2014';
+  }
+  return '\u2014';
+}
+
+export function TradeAnalyzer({ players, profiles }) {
   const [sideA, setSideA] = useState([]);
   const [sideB, setSideB] = useState([]);
   const [searchA, setSearchA] = useState('');
   const [searchB, setSearchB] = useState('');
-  const [expandedPlayer, setExpandedPlayer] = useState(null);
   const [openPanel, setOpenPanel] = useState(null);
-  const format = scoringFormat || 'ppr';
 
   const searchPlayers = (query) => {
     if (!query || query.length < 2 || !players) return [];
     const q = query.toLowerCase();
     return Object.entries(players)
-      .filter(([id, p]) => (p.status === 'Active' || p.active === true || (p.team && p.team !== '')) &&
-        p.position && ['QB','RB','WR','TE','K'].includes(p.position) &&
-        (`${p.first_name || ''} ${p.last_name || ''}`).toLowerCase().includes(q) || (NFL_TEAMS[p.team] || '').includes(q))
+      .filter(([id, p]) =>
+        (p.status === 'Active' || p.active === true || (p.team && p.team !== '')) &&
+        p.position && ['QB', 'RB', 'WR', 'TE', 'K'].includes(p.position) &&
+        ((`${p.first_name || ''} ${p.last_name || ''}`).toLowerCase().includes(q) ||
+         (NFL_TEAMS[p.team] || '').includes(q)))
       .slice(0, 8)
       .map(([id, p]) => ({ id, ...p }));
   };
@@ -33,48 +49,71 @@ export function TradeAnalyzer({ players, stats, projections, currentWeek, scorin
   const resultsA = useMemo(() => searchPlayers(searchA), [searchA, players]);
   const resultsB = useMemo(() => searchPlayers(searchB), [searchB, players]);
 
-  const getPlayerValue = (p) => {
-    const proj = projections[p.id] || {};
-    const projected = calcFantasyPts(proj, format).value;
-    const grade = computeCompositeGrade(stats[p.id] || {}, p.position);
-    const dynasty = calcDynastyValue(projected, p.position, p.age || 0, p.years_exp || 0, p.injury_status);
-    return { projected, grade, dynasty };
+  const getAnalysis = (p) => {
+    const fullName = `${p.first_name || ''} ${p.last_name || ''}`.trim();
+    const profile = getPlayerProfile(profiles, fullName, p.position);
+    const teamProfile = getTeamProfile(profiles, p.team);
+    return analyzePlayer(profile, teamProfile);
   };
 
-  const totalVal = (side) => side.reduce((s, p) => s + getPlayerValue(p).dynasty.value, 0);
-  const totalProj = (side) => side.reduce((s, p) => s + getPlayerValue(p).projected, 0);
+  const getComposite = (p) => {
+    const analysis = getAnalysis(p);
+    const tv = tradeValue(analysis);
+    return tv.value || 0;
+  };
+
+  const totalComposite = (side) => side.reduce((s, p) => s + getComposite(p), 0);
 
   const addPlayer = (side, player) => {
     if (side === 'A') { setSideA(s => [...s, player]); setSearchA(''); }
     else { setSideB(s => [...s, player]); setSearchB(''); }
   };
 
-  const valDiff = totalVal(sideB) - totalVal(sideA);
-  const projDiff = totalProj(sideB) - totalProj(sideA);
+  const compDiff = totalComposite(sideB) - totalComposite(sideA);
   const hasPlayers = sideA.length > 0 || sideB.length > 0;
 
-  let verdict = '', verdictColor = 'var(--meta)', verdictDetail = '';
+  let verdict = '';
+  let verdictColor = 'var(--meta)';
+  let verdictDetail = '';
+
   if (hasPlayers) {
-    if (Math.abs(valDiff) < 5 && Math.abs(projDiff) < 2) { verdict = 'FAIR TRADE'; verdictColor = '#6b7280'; verdictDetail = 'Even value — comes down to team needs.'; }
-    else if (valDiff > 10 && projDiff > 0) { verdict = 'STRONG WIN'; verdictColor = '#16a34a'; verdictDetail = `You gain ${projDiff.toFixed(1)} pts/wk AND superior long-term value (+${valDiff}).`; }
-    else if (valDiff > 5) { verdict = 'YOU WIN'; verdictColor = '#22c55e'; verdictDetail = projDiff < 0 ? `Short-term loss (${projDiff.toFixed(1)} pts/wk) but long-term value gain (+${valDiff}). Dynasty play.` : `You gain both production (+${projDiff.toFixed(1)}) and value (+${valDiff}).`; }
-    else if (valDiff < -10 && projDiff < 0) { verdict = 'STRONG LOSS'; verdictColor = '#dc2626'; verdictDetail = `You lose ${Math.abs(projDiff).toFixed(1)} pts/wk AND long-term value (${valDiff}). Avoid.`; }
-    else if (valDiff < -5) { verdict = 'YOU LOSE'; verdictColor = '#f97316'; verdictDetail = projDiff > 0 ? `Short-term gain (+${projDiff.toFixed(1)} pts/wk) but selling low on long-term value (${valDiff}). Win-now move.` : `Negative on both axes. Reconsider.`; }
-    else { verdict = 'MARGINAL'; verdictColor = '#f59e0b'; verdictDetail = 'Close call — consider your team\'s competitive window.'; }
+    if (Math.abs(compDiff) < 5) {
+      verdict = 'FAIR TRADE';
+      verdictColor = '#6b7280';
+      verdictDetail = 'Even composite value \u2014 comes down to team needs.';
+    } else if (compDiff > 20) {
+      verdict = 'STRONG WIN';
+      verdictColor = '#16a34a';
+      verdictDetail = `You gain +${compDiff} composite points. Significant upgrade.`;
+    } else if (compDiff > 5) {
+      verdict = 'YOU WIN';
+      verdictColor = '#22c55e';
+      verdictDetail = `You gain +${compDiff} composite points. Favorable deal.`;
+    } else if (compDiff < -20) {
+      verdict = 'STRONG LOSS';
+      verdictColor = '#dc2626';
+      verdictDetail = `You lose ${Math.abs(compDiff)} composite points. Avoid.`;
+    } else if (compDiff < -5) {
+      verdict = 'YOU LOSE';
+      verdictColor = '#f97316';
+      verdictDetail = `You lose ${Math.abs(compDiff)} composite points. Reconsider.`;
+    } else {
+      verdict = 'MARGINAL';
+      verdictColor = '#f59e0b';
+      verdictDetail = 'Close call \u2014 consider your roster construction.';
+    }
   }
 
-  // Build verdict explain result
   const verdictResult = hasPlayers ? {
     value: verdict,
     explain: {
-      method: 'Dynasty value comparison: sum of dynasty scores for each side + weekly projection delta',
-      inputs: {
-        sideA_dynasty: totalVal(sideA), sideB_dynasty: totalVal(sideB),
-        sideA_proj: Math.round(totalProj(sideA) * 10) / 10, sideB_proj: Math.round(totalProj(sideB) * 10) / 10,
-      },
-      formula: `Value delta: ${totalVal(sideB)} - ${totalVal(sideA)} = ${valDiff > 0 ? '+' : ''}${valDiff} | Proj delta: ${totalProj(sideB).toFixed(1)} - ${totalProj(sideA).toFixed(1)} = ${projDiff > 0 ? '+' : ''}${projDiff.toFixed(1)} pts/wk`,
-      source: 'Dynasty values from engine/dynasty.js, projections from Sleeper API',
-      caveats: ['Dynasty values are composite scores, not trade pick equivalents', 'Projections are rest-of-season estimates from Sleeper'],
+      method: 'Composite value comparison: sum of analytics composite scores (0-99) for each side',
+      formula: `Composite \u0394: ${totalComposite(sideB)} - ${totalComposite(sideA)} = ${compDiff > 0 ? '+' : ''}${compDiff}`,
+      source: '2024 nflfastR play-by-play analytics profiles',
+      caveats: [
+        'Composite scores are weighted by year-to-year predictive research',
+        'Players without profiles contribute 0 to the total',
+      ],
     },
   } : null;
 
@@ -97,26 +136,29 @@ export function TradeAnalyzer({ players, stats, projections, currentWeek, scorin
         `}
       </div>
       ${side.map((p, i) => {
-        const v = getPlayerValue(p);
+        const analysis = getAnalysis(p);
+        const composite = analysis ? analysis.composite.value : 0;
+        const stat = keyStat(analysis, p.position);
         return html`
-          <div key=${i} class="card--compact" style=${{ marginBottom: 4, background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', padding: '5px 8px', cursor: 'pointer' }}
-            onClick=${() => setExpandedPlayer(expandedPlayer === p.id ? null : p.id)}>
+          <div key=${i} class="card--compact" style=${{
+            marginBottom: 4, background: 'var(--surface)', border: '1px solid var(--border)',
+            borderRadius: 'var(--radius-sm)', padding: '5px 8px', display: 'flex', alignItems: 'center', gap: 6,
+          }}>
             <span style=${{ fontSize: 10, fontWeight: 700, color: POS_COLORS[p.position] || 'var(--meta)', width: 22 }}>${p.position}</span>
             <span style=${{ flex: 1, fontSize: 11, fontWeight: 600 }}>
               ${p.first_name} ${p.last_name}
-              <span class="text-meta" style=${{ fontSize: 9 }}> ${p.team || 'FA'} · ${p.age || '?'}yo</span>
+              <span class="text-meta" style=${{ fontSize: 9 }}> ${p.team || 'FA'}</span>
             </span>
-            <${GradeRing} grade=${v.grade.value} size=${26} />
-            <span class="text-mono text-blue" style=${{ fontSize: 11, minWidth: 30, textAlign: 'right' }}>${v.projected.toFixed(1)}</span>
+            <${GradeRing} grade=${composite} size=${26} />
+            <span class="text-mono" style=${{ fontSize: 10, color: 'var(--text-light)', minWidth: 55, textAlign: 'right' }}>${stat}</span>
             <span onClick=${(e) => { e.stopPropagation(); setSide(s => s.filter((_, j) => j !== i)); }}
-              style=${{ fontSize: 14, color: 'var(--red)', cursor: 'pointer' }}>×</span>
+              style=${{ fontSize: 14, color: 'var(--red)', cursor: 'pointer', marginLeft: 4 }}>\u00d7</span>
           </div>
         `;
       })}
       ${side.length > 0 && html`
         <div class="flex-between" style=${{ marginTop: 6, fontSize: 11, fontWeight: 700 }}>
-          <span class="text-meta">Proj: <span class="text-mono text-blue">${totalProj(side).toFixed(1)}</span></span>
-          <span style=${{ color: 'var(--navy)' }}>Value: <span class="text-mono">${totalVal(side)}</span></span>
+          <span style=${{ color: 'var(--navy)' }}>Composite Total: <span class="text-mono">${totalComposite(side)}</span></span>
         </div>
       `}
     </div>
@@ -126,7 +168,7 @@ export function TradeAnalyzer({ players, stats, projections, currentWeek, scorin
     <div class="fade-in" style=${{ margin: '10px 16px' }}>
       <div class="card" style=${{ padding: '16px 20px' }}>
         <div style=${{ fontSize: 14, fontWeight: 700, color: 'var(--navy)', marginBottom: 2 }}>Trade Analyzer</div>
-        <div style=${{ fontSize: 11, color: 'var(--meta)', marginBottom: 14 }}>Projections + stat-based score + age trajectory + dynasty value. Click "Show Math" on the verdict.</div>
+        <div style=${{ fontSize: 11, color: 'var(--meta)', marginBottom: 14 }}>Play-by-play composite scores (0-99). Click "Show Math" on the verdict.</div>
         <div class="trade-sides">
           ${renderSide(sideA, setSideA, searchA, setSearchA, resultsA, 'YOU GIVE', 'A')}
           <div class="trade-swap">${'\u21c4'}</div>
@@ -138,8 +180,7 @@ export function TradeAnalyzer({ players, stats, projections, currentWeek, scorin
               <div class="verdict__title" style=${{ color: verdictColor }}>${verdict}</div>
               <div class="verdict__detail">${verdictDetail}</div>
               <div class="verdict__stats">
-                <span>Proj \u0394: <strong class="text-mono" style=${{ color: projDiff >= 0 ? 'var(--green)' : 'var(--red)' }}>${projDiff >= 0 ? '+' : ''}${projDiff.toFixed(1)}</strong> pts/wk</span>
-                <span>Value \u0394: <strong class="text-mono" style=${{ color: valDiff >= 0 ? 'var(--green)' : 'var(--red)' }}>${valDiff >= 0 ? '+' : ''}${valDiff}</strong></span>
+                <span>Composite \u0394: <strong class="text-mono" style=${{ color: compDiff >= 0 ? 'var(--green)' : 'var(--red)' }}>${compDiff >= 0 ? '+' : ''}${compDiff}</strong></span>
               </div>
               <div style=${{ fontSize: 10, color: 'var(--blue)', marginTop: 6, fontWeight: 600 }}>Click to show math \u25bc</div>
             </div>

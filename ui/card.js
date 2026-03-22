@@ -1,236 +1,389 @@
-// ui/card.js — Player Intelligence Card: surface layer + expandable depth
+// ui/card.js — Player Intelligence Card: play-by-play analytics surface
 
 import { React, html } from './htm.js';
-import { GradeRing, Sparkline, SentimentMeter, StatChip, SignalBadge, TrendArrow, PositionBadge, POS_COLORS } from './primitives.js';
+import { GradeRing, Sparkline, SentimentMeter, StatChip, TrendArrow, PositionBadge } from './primitives.js';
 import { ExplainPanel } from './explain.js';
-import { computeCompositeGrade, gradeColor } from '../engine/grades.js';
-import { calcDynastyValue, getTrajectory, AGE_CURVES } from '../engine/dynasty.js';
-import { calcFantasyPts, calcCeilingFloor } from '../engine/scoring.js';
-import { analyzePatterns } from '../engine/trends.js';
+import { gradeColor } from '../engine/grades.js';
+import { generateScoutReport } from '../engine/analytics.js';
 import { fetchPlayerSentiment } from '../engine/sentiment.js';
 import { fetchHeadlines } from '../api/news.js';
-import { fetchMultiWeekStats } from '../api/sleeper.js';
 
 const { useState, useEffect } = React;
 
-export function PlayerIntelligenceCard({ player, stats, projections, currentWeek, scoringFormat, compact, onClose }) {
+// ── Metric definitions by position ──
+
+const QB_METRICS = [
+  { key: 'epa', label: 'EPA/db' },
+  { key: 'cpoe', label: 'CPOE' },
+  { key: 'deepBall', label: 'Deep Ball' },
+  { key: 'pressure', label: 'Press Delta' },
+  { key: 'consistency', label: 'Consistency' },
+  { key: 'thirdDown', label: '3rd Down' },
+];
+
+const WR_METRICS = [
+  { key: 'targetShare', label: 'Tgt Share' },
+  { key: 'wopr', label: 'WOPR' },
+  { key: 'epa', label: 'EPA/tgt' },
+  { key: 'adot', label: 'aDOT' },
+  { key: 'racr', label: 'RACR' },
+  { key: 'consistency', label: 'Consistency' },
+];
+
+const RB_METRICS = [
+  { key: 'weightedOpps', label: 'Wtd Opps' },
+  { key: 'receivingWork', label: 'Rec Work %' },
+  { key: 'rushEpa', label: 'Rush EPA' },
+  { key: 'goalLine', label: 'Goal Line %' },
+  { key: 'explosiveness', label: 'Explosive %' },
+  { key: 'consistency', label: 'Consistency' },
+];
+
+function metricsForPosition(pos) {
+  if (pos === 'QB') return QB_METRICS;
+  if (pos === 'RB') return RB_METRICS;
+  return WR_METRICS; // WR + TE
+}
+
+// ── Compact key stat by position ──
+
+function compactKeyStat(profile, pos) {
+  if (!profile) return { label: '', value: '--' };
+  if (pos === 'QB' && profile.epa) return { label: 'EPA', value: fmtVal(profile.epa.value) };
+  if (pos === 'RB' && profile.weightedOpps) return { label: 'Opps', value: fmtVal(profile.weightedOpps.value) };
+  if ((pos === 'WR' || pos === 'TE') && profile.targetShare) return { label: 'Tgt%', value: fmtVal(profile.targetShare.value) };
+  return { label: '', value: '--' };
+}
+
+// ── Format a metric value for display ──
+
+function fmtVal(v) {
+  if (v == null) return '--';
+  if (typeof v === 'string') return v;
+  if (Number.isInteger(v)) return String(v);
+  return v.toFixed ? v.toFixed(2) : String(v);
+}
+
+// ── Metric value color ──
+
+function metricColor(result) {
+  if (!result || result.value == null) return 'var(--navy)';
+  const explain = result.explain;
+  if (!explain) return 'var(--navy)';
+  // Use the composite-style rating if the value is 0-99 scale
+  if (typeof result.value === 'number' && result.value >= 0 && result.value <= 99 && explain.method && explain.method.includes('Composite')) {
+    return gradeColor(result.value);
+  }
+  return 'var(--navy)';
+}
+
+// ══════════════════════════════════════
+// Main export
+// ══════════════════════════════════════
+
+export function PlayerIntelligenceCard({ player, stats, projections, currentWeek, scoringFormat, profile, compact, onClose }) {
   const [openPanel, setOpenPanel] = useState(null);
   const [sentiment, setSentiment] = useState(null);
-  const [patterns, setPatterns] = useState(null);
-  const [loadingIntel, setLoadingIntel] = useState(true);
+  const [loadingBuzz, setLoadingBuzz] = useState(true);
 
   const toggle = (id) => setOpenPanel(prev => prev === id ? null : id);
 
   const pos = player.position;
-  const st = stats[player.id] || {};
-  const proj = projections[player.id] || {};
-  const format = scoringFormat || 'ppr';
-
-  const actualResult = calcFantasyPts(st, format);
-  const projResult = calcFantasyPts(proj, format);
-  const gradeResult = computeCompositeGrade(st, pos);
-  const { ceiling: ceilingResult, floor: floorResult } = calcCeilingFloor(projResult.value, pos);
-
   const age = player.age || 0;
-  const yearsExp = player.years_exp || 0;
-  const dynastyResult = calcDynastyValue(projResult.value, pos, age, yearsExp, player.injury_status);
-  const traj = dynastyResult.trajectory;
-  const curve = AGE_CURVES[pos] || AGE_CURVES.WR;
-  const peakWindow = traj.yearsToPeak > 0 ? traj.yearsToPeak : Math.max(0, curve.peakEnd - age);
 
-  // Async intelligence loading
+  // ── Async: news buzz (the one live data source) ──
   useEffect(() => {
     if (compact) return;
-    setLoadingIntel(true);
+    setLoadingBuzz(true);
     const name = `${player.first_name} ${player.last_name}`;
-    Promise.all([
-      fetchHeadlines(name + ' NFL').then(headlines => fetchPlayerSentiment(name, headlines)),
-      fetchMultiWeekStats(player.id, currentWeek || 6).then(weeks => analyzePatterns(weeks, pos, format)),
-    ]).then(([sent, pat]) => {
-      setSentiment(sent);
-      setPatterns(pat);
-      setLoadingIntel(false);
-    }).catch(() => setLoadingIntel(false));
+    fetchHeadlines(name + ' NFL')
+      .then(headlines => fetchPlayerSentiment(name, headlines))
+      .then(sent => { setSentiment(sent); setLoadingBuzz(false); })
+      .catch(() => setLoadingBuzz(false));
   }, [player.id, compact]);
 
-  // -- Compact mode: one row --
+  // ── Compact mode ──
   if (compact) {
+    const keyStat = compactKeyStat(profile, pos);
     return html`
       <div class="card--compact">
         <${PositionBadge} position=${pos} />
         <span style=${{ flex: 1, fontSize: 12, fontWeight: 600 }}>
           ${player.first_name} ${player.last_name}
-          <span class="text-meta" style=${{ fontSize: 10, marginLeft: 4 }}>${player.team || 'FA'} · ${age}yo</span>
+          <span class="text-meta" style=${{ fontSize: 10, marginLeft: 4 }}>${player.team || 'FA'}</span>
         </span>
-        <${GradeRing} grade=${gradeResult.value} size=${26} />
-        <span class="text-mono text-blue" style=${{ fontSize: 11, minWidth: 30, textAlign: 'right' }}>${projResult.value.toFixed(1)}</span>
+        ${profile ? html`
+          <${GradeRing} grade=${profile.composite.value} size=${26} />
+          <span class="text-mono" style=${{ fontSize: 10, color: 'var(--meta)', minWidth: 44, textAlign: 'right' }}>
+            ${keyStat.label} ${keyStat.value}
+          </span>
+        ` : html`
+          <span class="text-meta" style=${{ fontSize: 10 }}>No profile</span>
+        `}
       </div>
     `;
   }
 
-  // -- Full mode --
+  // ── Fallback: no analytical profile ──
+  if (!profile) {
+    return html`
+      <div class="card fade-in">
+        <div class="flex-between" style=${{ marginBottom: 12 }}>
+          <div>
+            <div class="flex-center" style=${{ gap: 8 }}>
+              <${PositionBadge} position=${pos} />
+              <span style=${{ fontSize: 18, fontWeight: 800, color: 'var(--navy)' }}>${player.first_name} ${player.last_name}</span>
+              ${onClose && html`<span onClick=${onClose} style=${{ cursor: 'pointer', color: 'var(--meta)', fontSize: 16, marginLeft: 8 }}>x</span>`}
+            </div>
+            <div style=${{ fontSize: 11, color: 'var(--meta)', marginTop: 4 }}>
+              ${player.team || 'FA'} · Age ${age}
+            </div>
+          </div>
+        </div>
+        <div style=${{ padding: '20px 12px', textAlign: 'center', color: 'var(--meta)', fontSize: 12, lineHeight: 1.6, background: 'var(--surface)', borderRadius: 'var(--radius-sm)' }}>
+          No play-by-play profile available. This player may be a rookie or had insufficient 2024 data.
+        </div>
+      </div>
+    `;
+  }
 
-  // Scout report generation
-  const scoutParts = [];
-  if (gradeResult.value >= 80) scoutParts.push(`Elite-tier ${pos}. Grade of ${gradeResult.value} ranks among the top producers at the position.`);
-  else if (gradeResult.value >= 60) scoutParts.push(`Solid starter-level ${pos}. Stat-based score of ${gradeResult.value} shows reliable production.`);
-  else scoutParts.push(`Below-average production for a ${pos}. Score of ${gradeResult.value} suggests limited fantasy upside.`);
+  // ══════════════════════════════════════
+  // Full mode
+  // ══════════════════════════════════════
 
-  if (traj.label === 'ASCENDING') scoutParts.push(`At ${age}, still ${peakWindow} years from prime window (${curve.primeLabel}). ${traj.yearsToCliff}yr to career cliff.`);
-  else if (traj.label === 'PRIME') scoutParts.push(`Peak production window NOW (prime: ${curve.primeLabel}). ${pos === 'RB' ? `RB shelf life is short — ~${traj.yearsToCliff}yr to cliff.` : `${traj.yearsToCliff}yr to cliff.`}`);
-  else if (traj.label === 'DECLINING') scoutParts.push(`Past prime at ${age} (prime was ${curve.primeLabel}). ${traj.yearsToCliff}yr to cliff.`);
-  else scoutParts.push(`Late career at ${age}. ${traj.yearsToCliff > 0 ? traj.yearsToCliff + 'yr max remaining.' : 'At or past typical career cliff.'}`);
-
-  if (patterns?.signal === 'BUY LOW') scoutParts.push('PATTERN: Recent underperformance vs. baseline — buy-low window.');
-  if (patterns?.signal === 'SELL HIGH') scoutParts.push('PATTERN: Recent surge above baseline — sell-high window.');
-  if (sentiment?.value > 40) scoutParts.push('BUZZ: Overwhelmingly positive media narrative.');
-  if (sentiment?.value < -40) scoutParts.push('BUZZ: Negative media narrative — investigate before buying.');
+  const metrics = metricsForPosition(pos);
+  const composite = profile.composite.value;
+  const scheme = profile.scheme;
+  const scoutReport = generateScoutReport(profile, `${player.first_name} ${player.last_name}`, pos);
 
   return html`
     <div class="card fade-in">
 
+      ${renderHeader(player, pos, age, composite, scheme, openPanel, toggle, onClose)}
 
-      <div class="flex-between" style=${{ marginBottom: 12 }}>
-        <div style=${{ flex: 1 }}>
-          <div class="flex-center" style=${{ gap: 8 }}>
-            <span style=${{ fontSize: 18, fontWeight: 800, color: 'var(--navy)' }}>${player.first_name} ${player.last_name}</span>
-            ${onClose && html`<span onClick=${onClose} style=${{ cursor: 'pointer', color: 'var(--meta)', fontSize: 16 }}>×</span>`}
-          </div>
-          <div style=${{ fontSize: 11, color: 'var(--meta)', marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <span style=${{ color: POS_COLORS[pos], fontWeight: 700 }}>${pos}</span>
-            <span>${player.team || 'FA'}</span>
-            <span>Age ${age}</span>
-            <span>Yr ${yearsExp}</span>
-            ${player.college && html`<span>${player.college}</span>`}
-            ${player.injury_status && html`<span style=${{ color: 'var(--red)', fontWeight: 600 }}>${player.injury_status}</span>`}
-          </div>
-        </div>
-        <div style=${{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <${ExplainPanel} id="grade-ring" isOpen=${openPanel === 'grade-ring'} onToggle=${toggle} result=${gradeResult}>
-            <${GradeRing} grade=${gradeResult.value} size=${52} label=${gradeResult.label} />
-          <//>
-          <${ExplainPanel} id="dynasty" isOpen=${openPanel === 'dynasty'} onToggle=${toggle} result=${dynastyResult}>
-            <div style=${{ textAlign: 'center' }}>
-              <div style=${{ fontSize: 22, fontWeight: 800, color: dynastyResult.value >= 70 ? 'var(--green)' : dynastyResult.value >= 45 ? 'var(--gold)' : 'var(--red)', lineHeight: 1 }}>${dynastyResult.value}</div>
-              <div style=${{ fontSize: 8, fontWeight: 600, color: 'var(--meta)' }}>DYNASTY</div>
-            </div>
-          <//>
-        </div>
-      </div>
+      ${renderMetricsGrid(profile, metrics, openPanel, toggle)}
 
+      ${renderStatsBar(profile.stats, pos)}
 
-      <div class="stat-grid">
-        ${[
-          { id: 'actual', label: 'ACTUAL', result: actualResult, color: actualResult.value > 15 ? 'var(--green)' : 'var(--navy)' },
-          { id: 'projected', label: 'PROJECTED', result: projResult, color: 'var(--blue)' },
-          { id: 'ceiling', label: 'CEILING', result: ceilingResult, color: 'var(--green)' },
-          { id: 'floor', label: 'FLOOR', result: floorResult, color: 'var(--red)' },
-          { id: 'grade', label: 'GRADE', result: gradeResult, value: gradeResult.value, color: gradeColor(gradeResult.value) },
-          { id: 'traj', label: traj.label, result: dynastyResult, value: traj.label === 'ASCENDING' ? `${peakWindow}yr→peak` : traj.label === 'PRIME' ? 'NOW' : traj.yearsToCliff > 0 ? `${traj.yearsToCliff}yr left` : '—', color: traj.color },
-        ].map(cell => html`
-          <${ExplainPanel} id=${cell.id} isOpen=${openPanel === cell.id} onToggle=${toggle} result=${cell.result} key=${cell.id}>
-            <div class="stat-cell">
-              <div class="stat-cell__value" style=${{ color: cell.color }}>${cell.value !== undefined ? cell.value : cell.result.value.toFixed ? cell.result.value.toFixed(1) : cell.result.value}</div>
-              <div class="stat-cell__label">${cell.label}</div>
-            </div>
-          <//>
-        `)}
-      </div>
+      ${renderTrendRow(profile.weeklyEpa, openPanel, toggle)}
 
-
-      <div class="stats-bar">
-        ${pos === 'QB' && html`
-          <${StatChip} label="Pass" value=${`${st.pass_yd||0}yd`} />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="TD" value=${st.pass_td||0} variant="good" />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="INT" value=${st.pass_int||0} variant=${(st.pass_int||0) > 0 ? 'bad' : 'neutral'} />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="Rush" value=${`${st.rush_yd||0}yd`} />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="Cmp%" value=${st.pass_att > 0 ? `${Math.round(((st.pass_cmp||0)/st.pass_att)*100)}%` : '—'} />
-        `}
-        ${pos === 'RB' && html`
-          <${StatChip} label="Rush" value=${`${st.rush_yd||0}yd`} />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="TD" value=${st.rush_td||0} variant="good" />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="YPC" value=${st.rush_att > 0 ? ((st.rush_yd||0)/st.rush_att).toFixed(1) : '—'} />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="Rec" value=${st.rec||0} />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="Fum" value=${st.fum_lost||0} variant=${(st.fum_lost||0) > 0 ? 'bad' : 'neutral'} />
-        `}
-        ${(pos === 'WR' || pos === 'TE') && html`
-          <${StatChip} label="Rec" value=${st.rec||0} />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="Yd" value=${st.rec_yd||0} />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="TD" value=${st.rec_td||0} variant="good" />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="Tgt" value=${st.rec_tgt||'?'} />
-          <span class="stats-bar__sep">|</span>
-          <${StatChip} label="Y/R" value=${(st.rec||0) > 0 ? ((st.rec_yd||0)/st.rec).toFixed(1) : '—'} />
-        `}
-      </div>
-
-
-      ${loadingIntel ? html`
-        <div class="loading-pulse" style=${{ padding: 8, fontSize: 10, color: 'var(--meta)' }}>Loading intelligence (multi-week stats + news)...</div>
-      ` : html`
-        <div class="trend-buzz-row">
-          <${ExplainPanel} id="trend" isOpen=${openPanel === 'trend'} onToggle=${toggle} result=${patterns}>
-            <div class="panel">
-              <div class="panel__header">
-                <span class="panel__title">TREND</span>
-                <div class="flex-center" style=${{ gap: 6 }}>
-                  ${patterns && html`
-                    <span style=${{ fontSize: 10, fontWeight: 700, color: patterns.trendDir > 0 ? 'var(--green)' : patterns.trendDir < 0 ? 'var(--red)' : 'var(--meta)', background: patterns.trendDir > 0 ? 'var(--green-bg)' : patterns.trendDir < 0 ? 'var(--red-bg)' : 'var(--surface)', padding: '1px 6px', borderRadius: 3 }}>${patterns.value}</span>
-                    <${TrendArrow} dir=${patterns.trendDir} size=${12} />
-                  `}
-                </div>
-              </div>
-              ${patterns && html`
-                <${Sparkline} data=${patterns.weeklyPts} height=${28} color=${patterns.trendDir > 0 ? '#16a34a' : patterns.trendDir < 0 ? '#dc2626' : '#6b7280'} />
-                <div style=${{ fontSize: 9, color: 'var(--meta)', marginTop: 4 }}>
-                  Avg: ${patterns.mean} · Recent: ${patterns.recentMean}
-                  ${patterns.signal !== 'HOLD' ? html` · <${SignalBadge} signal=${patterns.signal} confidence=${patterns.confidence} />` : ''}
-                </div>
-              `}
-            </div>
-          <//>
-          <${ExplainPanel} id="buzz" isOpen=${openPanel === 'buzz'} onToggle=${toggle} result=${sentiment}>
-            <div class="panel">
-              <div class="panel__header">
-                <span class="panel__title">NEWS BUZZ</span>
-                <div class="flex-center" style=${{ gap: 6 }}>
-                  ${sentiment && html`
-                    <${SentimentMeter} score=${sentiment.value} width=${60} />
-                    <span class="text-mono" style=${{ fontSize: 10, fontWeight: 700, color: sentiment.value > 0 ? 'var(--green)' : sentiment.value < 0 ? 'var(--red)' : 'var(--meta)' }}>${sentiment.value > 0 ? '+' : ''}${sentiment.value}</span>
-                  `}
-                </div>
-              </div>
-              ${sentiment && html`
-                <div style=${{ fontSize: 9, color: 'var(--meta)', lineHeight: 1.5 }}>
-                  ${sentiment.volume} articles (7d) · ${sentiment.narrative}
-                </div>
-                ${sentiment.headlines.slice(0, 3).map((h, i) => html`
-                  <div key=${i} style=${{ fontSize: 9, color: 'var(--text-light)', padding: '2px 0', borderTop: i > 0 ? '1px solid var(--border-light)' : 'none', marginTop: i === 0 ? 4 : 0 }}>
-                    <a href=${h.link} target="_blank" rel="noopener" style=${{ color: 'var(--text-light)', textDecoration: 'none' }}>
-                      ${h.title.slice(0, 70)}${h.title.length > 70 ? '...' : ''}
-                    </a>
-                  </div>
-                `)}
-              `}
-            </div>
-          <//>
-        </div>
-      `}
-
+      ${renderNewsBuzz(sentiment, loadingBuzz, openPanel, toggle)}
 
       <div class="scout-report">
-        <strong>Scout Report:</strong> ${scoutParts.join(' ')}
+        <strong>Scout Report:</strong> ${scoutReport}
       </div>
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════
+// Header
+// ══════════════════════════════════════
+
+function renderHeader(player, pos, age, composite, scheme, openPanel, toggle, onClose) {
+  const schemeName = scheme && scheme.value !== 'Unknown' ? scheme.value : null;
+
+  return html`
+    <div class="flex-between" style=${{ marginBottom: 12 }}>
+      <div style=${{ flex: 1 }}>
+        <div class="flex-center" style=${{ gap: 8 }}>
+          <${PositionBadge} position=${pos} />
+          <span style=${{ fontSize: 18, fontWeight: 800, color: 'var(--navy)' }}>${player.first_name} ${player.last_name}</span>
+          ${onClose && html`<span onClick=${onClose} style=${{ cursor: 'pointer', color: 'var(--meta)', fontSize: 16, marginLeft: 4 }}>x</span>`}
+        </div>
+        <div style=${{ fontSize: 11, color: 'var(--meta)', marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span>${player.team || 'FA'}</span>
+          <span>Age ${age}</span>
+          ${player.injury_status && html`<span style=${{ color: 'var(--red)', fontWeight: 600 }}>${player.injury_status}</span>`}
+          ${schemeName && html`
+            <span style=${{ fontSize: 9, fontWeight: 600, color: 'var(--blue)', background: 'var(--blue-bg)', padding: '1px 6px', borderRadius: 3, border: '1px solid var(--blue-border)' }}>${schemeName}</span>
+          `}
+        </div>
+      </div>
+      <${ExplainPanel} id="composite-ring" isOpen=${openPanel === 'composite-ring'} onToggle=${toggle} result=${scheme}>
+        <${GradeRing} grade=${composite} size=${52} label="COMP" />
+      <//>
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════
+// Primary Metrics Grid (6 cells)
+// ══════════════════════════════════════
+
+function renderMetricsGrid(profile, metrics, openPanel, toggle) {
+  return html`
+    <div class="stat-grid">
+      ${metrics.map(m => {
+        const result = profile[m.key];
+        if (!result) return html`
+          <div class="stat-cell" key=${m.key}>
+            <div class="stat-cell__value" style=${{ color: 'var(--meta)' }}>--</div>
+            <div class="stat-cell__label">${m.label}</div>
+          </div>
+        `;
+        const val = fmtVal(result.value);
+        return html`
+          <${ExplainPanel} id=${m.key} isOpen=${openPanel === m.key} onToggle=${toggle} result=${result} key=${m.key}>
+            <div class="stat-cell">
+              <div class="stat-cell__value" style=${{ color: metricColor(result) }}>${val}</div>
+              <div class="stat-cell__label">${m.label}</div>
+            </div>
+          <//>
+        `;
+      })}
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════
+// Stats Bar (position-specific raw stats)
+// ══════════════════════════════════════
+
+function renderStatsBar(profileStats, pos) {
+  if (!profileStats) return null;
+  const s = profileStats;
+
+  const sep = html`<span class="stats-bar__sep">|</span>`;
+
+  if (pos === 'QB') {
+    return html`
+      <div class="stats-bar">
+        <${StatChip} label="Att" value=${s.pass_attempts || 0} />
+        ${sep}
+        <${StatChip} label="EPA" value=${s.epa_total != null ? s.epa_total : '--'} variant=${(s.epa_total || 0) > 0 ? 'good' : 'neutral'} />
+        ${sep}
+        <${StatChip} label="Deep%" value=${s.deep_rate != null ? s.deep_rate + '%' : '--'} />
+        ${sep}
+        <${StatChip} label="Sack%" value=${s.sack_rate != null ? s.sack_rate + '%' : '--'} variant=${(s.sack_rate || 0) > 6 ? 'bad' : 'neutral'} />
+        ${sep}
+        <${StatChip} label="Shotgun" value=${s.shotgun_rate != null ? s.shotgun_rate + '%' : '--'} />
+      </div>
+    `;
+  }
+
+  if (pos === 'RB') {
+    return html`
+      <div class="stats-bar">
+        <${StatChip} label="Car" value=${s.carries || 0} />
+        ${sep}
+        <${StatChip} label="Tgt" value=${s.targets || 0} />
+        ${sep}
+        <${StatChip} label="Touch" value=${s.total_touches || 0} />
+        ${sep}
+        <${StatChip} label="RuYd" value=${s.rush_yards || 0} />
+        ${sep}
+        <${StatChip} label="RecYd" value=${s.rec_yards || 0} />
+        ${sep}
+        <${StatChip} label="YPC" value=${s.ypc || '--'} />
+        ${sep}
+        <${StatChip} label="Catch%" value=${s.catch_rate != null ? s.catch_rate + '%' : '--'} />
+      </div>
+    `;
+  }
+
+  // WR / TE
+  return html`
+    <div class="stats-bar">
+      <${StatChip} label="Tgt" value=${s.targets || 0} />
+      ${sep}
+      <${StatChip} label="Rec" value=${s.receptions || 0} />
+      ${sep}
+      <${StatChip} label="Catch%" value=${s.catch_rate != null ? s.catch_rate + '%' : '--'} />
+      ${sep}
+      <${StatChip} label="Deep%" value=${s.deep_rate != null ? s.deep_rate + '%' : '--'} />
+      ${sep}
+      <${StatChip} label="RZ Tgt" value=${s.rz_targets || 0} variant="good" />
+      ${sep}
+      <${StatChip} label="RZ%" value=${s.rz_share != null ? s.rz_share + '%' : '--'} />
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════
+// Trend Row (pre-computed weeklyEpa sparkline)
+// ══════════════════════════════════════
+
+function renderTrendRow(weeklyEpa, openPanel, toggle) {
+  if (!weeklyEpa || weeklyEpa.length < 2) return null;
+
+  const recent = weeklyEpa.slice(-4);
+  const earlier = weeklyEpa.slice(0, -4);
+  const recentAvg = recent.reduce((a, b) => a + b, 0) / recent.length;
+  const earlierAvg = earlier.length > 0 ? earlier.reduce((a, b) => a + b, 0) / earlier.length : recentAvg;
+  const trendDir = recentAvg > earlierAvg + 0.02 ? 1 : recentAvg < earlierAvg - 0.02 ? -1 : 0;
+  const trendColor = trendDir > 0 ? '#16a34a' : trendDir < 0 ? '#dc2626' : '#6b7280';
+
+  const trendResult = {
+    value: Math.round(recentAvg * 100) / 100,
+    explain: {
+      method: 'Weekly EPA Trend',
+      formula: `Recent 4-week avg: ${(recentAvg).toFixed(3)} vs earlier avg: ${(earlierAvg).toFixed(3)}`,
+      source: '2024 nflfastR play-by-play data (49,492 plays)',
+      caveats: [
+        `${weeklyEpa.length} weeks of EPA data`,
+        'Trend direction based on 0.02 EPA threshold',
+      ],
+    },
+  };
+
+  return html`
+    <div style=${{ marginBottom: 10 }}>
+      <${ExplainPanel} id="trend" isOpen=${openPanel === 'trend'} onToggle=${toggle} result=${trendResult}>
+        <div class="panel">
+          <div class="panel__header">
+            <span class="panel__title">EPA TREND</span>
+            <div class="flex-center" style=${{ gap: 6 }}>
+              <span class="text-mono" style=${{ fontSize: 10, fontWeight: 700, color: trendColor }}>${recentAvg.toFixed(2)}</span>
+              <${TrendArrow} dir=${trendDir} size=${12} />
+            </div>
+          </div>
+          <${Sparkline} data=${weeklyEpa} height=${28} color=${trendColor} />
+          <div style=${{ fontSize: 9, color: 'var(--meta)', marginTop: 4 }}>
+            ${weeklyEpa.length} weeks · Avg: ${(weeklyEpa.reduce((a, b) => a + b, 0) / weeklyEpa.length).toFixed(3)}
+          </div>
+        </div>
+      <//>
+    </div>
+  `;
+}
+
+// ══════════════════════════════════════
+// News Buzz (async live fetch)
+// ══════════════════════════════════════
+
+function renderNewsBuzz(sentiment, loadingBuzz, openPanel, toggle) {
+  if (loadingBuzz) {
+    return html`
+      <div class="loading-pulse" style=${{ padding: 8, fontSize: 10, color: 'var(--meta)', marginBottom: 10 }}>Loading news buzz...</div>
+    `;
+  }
+
+  if (!sentiment) return null;
+
+  return html`
+    <div style=${{ marginBottom: 10 }}>
+      <${ExplainPanel} id="buzz" isOpen=${openPanel === 'buzz'} onToggle=${toggle} result=${sentiment}>
+        <div class="panel">
+          <div class="panel__header">
+            <span class="panel__title">NEWS BUZZ</span>
+            <div class="flex-center" style=${{ gap: 6 }}>
+              <${SentimentMeter} score=${sentiment.value} width=${60} />
+              <span class="text-mono" style=${{ fontSize: 10, fontWeight: 700, color: sentiment.value > 0 ? 'var(--green)' : sentiment.value < 0 ? 'var(--red)' : 'var(--meta)' }}>${sentiment.value > 0 ? '+' : ''}${sentiment.value}</span>
+            </div>
+          </div>
+          <div style=${{ fontSize: 9, color: 'var(--meta)', lineHeight: 1.5 }}>
+            ${sentiment.volume} articles (7d) · ${sentiment.narrative}
+          </div>
+          ${sentiment.headlines && sentiment.headlines.slice(0, 3).map((h, i) => html`
+            <div key=${i} style=${{ fontSize: 9, color: 'var(--text-light)', padding: '2px 0', borderTop: i > 0 ? '1px solid var(--border-light)' : 'none', marginTop: i === 0 ? 4 : 0 }}>
+              <a href=${h.link} target="_blank" rel="noopener" style=${{ color: 'var(--text-light)', textDecoration: 'none' }}>
+                ${h.title.slice(0, 70)}${h.title.length > 70 ? '...' : ''}
+              </a>
+            </div>
+          `)}
+        </div>
+      <//>
     </div>
   `;
 }

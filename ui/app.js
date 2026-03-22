@@ -5,6 +5,7 @@ import { createRoot } from 'react-dom/client';
 import htm from 'htm';
 import { loadConfig } from '../config.js';
 import { getPlayers, getSeasonStats, getProjections, getNFLState } from '../api/sleeper.js';
+import { loadAllProfiles } from '../api/profiles.js';
 import { PlayerScout } from './scout.js';
 import { TradeAnalyzer } from './trade.js';
 import { Settings } from './settings.js';
@@ -13,12 +14,13 @@ const html = htm.bind(React.createElement);
 const { useState, useEffect, useReducer, useCallback } = React;
 
 const initialState = {
-  players: null, stats: {}, projections: {}, currentWeek: 1, loading: true, error: null,
+  players: null, profiles: null, stats: {}, projections: {}, currentWeek: 1, loading: true, error: null,
 };
 
 function reducer(state, action) {
   switch (action.type) {
     case 'SET_PLAYERS': return { ...state, players: action.data };
+    case 'SET_PROFILES': return { ...state, profiles: action.data };
     case 'SET_STATS': return { ...state, stats: action.data };
     case 'SET_PROJECTIONS': return { ...state, projections: action.data };
     case 'SET_WEEK': return { ...state, currentWeek: action.data };
@@ -39,8 +41,12 @@ function App() {
         const nflState = await getNFLState();
         const week = nflState.week || 1;
         dispatch({ type: 'SET_WEEK', data: week });
-        const players = await getPlayers();
+        const [players, profileData] = await Promise.all([
+          getPlayers(),
+          loadAllProfiles(),
+        ]);
         dispatch({ type: 'SET_PLAYERS', data: players });
+        dispatch({ type: 'SET_PROFILES', data: profileData });
         const [stats, projections] = await Promise.all([
           getSeasonStats(week), getProjections(week),
         ]);
@@ -59,13 +65,13 @@ function App() {
     setConfig(newConfig);
   }, []);
 
-  const { players, stats, projections, currentWeek, loading, error } = state;
+  const { players, profiles, stats, projections, currentWeek, loading, error } = state;
   const scoringFormat = config.scoringFormat;
 
   let content;
   if (loading) {
     content = html`<div style=${{ padding: '60px 20px', textAlign: 'center' }}>
-      <div class="loading-pulse" style=${{ fontSize: 14, color: 'var(--meta)', marginBottom: 12 }}>Loading player database from Sleeper API...</div>
+      <div class="loading-pulse" style=${{ fontSize: 14, color: 'var(--meta)', marginBottom: 12 }}>Loading player database + analytics...</div>
       <div style=${{ fontSize: 11, color: 'var(--meta)' }}>First load fetches player data. Subsequent visits load from cache instantly.</div>
     </div>`;
   } else if (error) {
@@ -75,11 +81,11 @@ function App() {
       <button class="btn btn--primary" style=${{ marginTop: 12 }} onClick=${() => location.reload()}>Retry</button>
     </div>`;
   } else if (view === 'trade') {
-    content = html`<${TradeAnalyzer} players=${players} stats=${stats} projections=${projections} currentWeek=${currentWeek} scoringFormat=${scoringFormat} />`;
+    content = html`<${TradeAnalyzer} players=${players} profiles=${profiles} stats=${stats} projections=${projections} currentWeek=${currentWeek} scoringFormat=${scoringFormat} />`;
   } else if (view === 'settings') {
-    content = html`<${Settings} config=${config} onSave=${handleSaveConfig} />`;
+    content = html`<${Settings} config=${config} profiles=${profiles} onSave=${handleSaveConfig} />`;
   } else {
-    content = html`<${PlayerScout} players=${players} stats=${stats} projections=${projections} currentWeek=${currentWeek} scoringFormat=${scoringFormat} />`;
+    content = html`<${PlayerScout} players=${players} profiles=${profiles} stats=${stats} projections=${projections} currentWeek=${currentWeek} scoringFormat=${scoringFormat} />`;
   }
 
   const tabs = [
