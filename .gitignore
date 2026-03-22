@@ -1,3 +1,4 @@
 .superpowers/
-data/
+data/*.csv
+data/*.csv.gz
 __pycache__/
