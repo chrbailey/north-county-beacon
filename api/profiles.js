@@ -34,24 +34,48 @@ export async function loadAllProfiles() {
   return { qb, receiver, rb, team };
 }
 
+// Convert "Patrick Mahomes" (Sleeper) to "P.Mahomes" (nflfastR)
+function toNflfastrName(fullName) {
+  if (!fullName) return '';
+  const parts = fullName.trim().split(/\s+/);
+  if (parts.length < 2) return fullName;
+  return parts[0].charAt(0) + '.' + parts[parts.length - 1];
+}
+
+function findInProfileSet(data, playerName) {
+  if (!data) return null;
+  // Try exact match first (handles edge cases)
+  if (data[playerName]) return data[playerName];
+  // Try nflfastR format: "P.Mahomes"
+  const nflName = toNflfastrName(playerName);
+  if (data[nflName]) return data[nflName];
+  // Try last-name match as fallback (for names like "Amon-Ra St. Brown")
+  const lastName = playerName.split(/\s+/).pop();
+  for (const [key, profile] of Object.entries(data)) {
+    if (key.endsWith('.' + lastName) || key.endsWith(' ' + lastName)) {
+      return profile;
+    }
+  }
+  return null;
+}
+
 export function getPlayerProfile(profiles, playerName, position) {
   if (!profiles || !playerName) return null;
-  // Try exact match first
-  if (position === 'QB' && profiles.qb && profiles.qb[playerName]) {
-    return { ...profiles.qb[playerName], profileType: 'qb' };
-  }
-  if ((position === 'WR' || position === 'TE') && profiles.receiver && profiles.receiver[playerName]) {
-    return { ...profiles.receiver[playerName], profileType: 'receiver' };
-  }
-  if (position === 'RB' && profiles.rb && profiles.rb[playerName]) {
-    return { ...profiles.rb[playerName], profileType: 'rb' };
+  let found = null;
+  // Try position-specific set first
+  if (position === 'QB') found = findInProfileSet(profiles.qb, playerName);
+  else if (position === 'WR' || position === 'TE') found = findInProfileSet(profiles.receiver, playerName);
+  else if (position === 'RB') found = findInProfileSet(profiles.rb, playerName);
+
+  if (found) {
+    const type = position === 'QB' ? 'qb' : position === 'RB' ? 'rb' : 'receiver';
+    return { ...found, profileType: type };
   }
   // Fallback: search all profile sets
   for (const [type, data] of Object.entries(profiles)) {
     if (type === 'team') continue;
-    if (data && data[playerName]) {
-      return { ...data[playerName], profileType: type };
-    }
+    const match = findInProfileSet(data, playerName);
+    if (match) return { ...match, profileType: type };
   }
   return null;
 }
